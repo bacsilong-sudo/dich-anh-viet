@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dịch Anh - Việt trực tiếp</title>
+<style>
+  :root { --main:#0b5ea8; --bg:#f4f7fb; --ok:#1a8f4c; --bad:#c62828; }
+  * { box-sizing:border-box; }
+  body { font-family:Segoe UI, Arial, sans-serif; background:var(--bg); margin:0; color:#1b2733; }
+  header { background:var(--main); color:#fff; padding:16px 24px; }
+  header h1 { margin:0; font-size:22px; }
+  header p { margin:4px 0 0; font-size:14px; opacity:.9; }
+  main { max-width:960px; margin:0 auto; padding:20px; }
+  .controls { display:flex; flex-wrap:wrap; gap:14px; align-items:center; background:#fff; padding:14px 16px; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  button { font-size:17px; padding:12px 26px; border:0; border-radius:8px; cursor:pointer; color:#fff; background:var(--ok); font-weight:600; }
+  button.stop { background:var(--bad); }
+  button.small { font-size:14px; padding:8px 14px; background:#6b7a8a; }
+  label { font-size:14px; display:flex; align-items:center; gap:6px; }
+  #status { font-size:14px; padding:6px 12px; border-radius:20px; background:#e3e9f0; }
+  #status.live { background:#d8f3e3; color:#146c3a; }
+  .panels { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+  @media (max-width:720px){
+    .panels{ grid-template-columns:1fr; }
+    .panel{ min-height:180px; max-height:34vh; }
+    #btn{ width:100%; padding:16px; font-size:19px; }
+    header h1{ font-size:19px; }
+  }
+  .panel { background:#fff; border-radius:10px; padding:14px 16px; box-shadow:0 1px 4px rgba(0,0,0,.08); min-height:340px; max-height:60vh; overflow-y:auto; }
+  .panel h2 { margin:0 0 10px; font-size:15px; color:var(--main); position:sticky; top:-14px; background:#fff; padding:4px 0; }
+  .line { padding:8px 0; border-bottom:1px solid #edf1f5; font-size:17px; line-height:1.45; }
+  .line.interim { color:#8a97a5; font-style:italic; }
+  .warn { background:#fff4e0; border-left:4px solid #f0a020; padding:10px 14px; margin-top:16px; border-radius:6px; font-size:14px; display:none; }
+  .tip { font-size:13px; color:#55636f; margin-top:14px; line-height:1.5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Dịch Anh → Việt trực tiếp</h1>
+  <p>Nói/nghe tiếng Anh qua micro, tự động dịch và đọc tiếng Việt ra loa ngay khi hết câu</p>
+</header>
+<main>
+  <div class="controls">
+    <button id="btn" class="">▶ Bắt đầu</button>
+    <span id="status">Chưa bắt đầu</span>
+    <label><input type="checkbox" id="speakOn" checked> Đọc tiếng Việt</label>
+    <label>Ngắt câu sau <input type="range" id="pause" min="300" max="1200" step="100" value="800" oninput="document.getElementById('pauseVal').textContent=(this.value/1000).toFixed(1)+' giây'"> <span id="pauseVal">0.8 giây</span></label>
+    <label><input type="checkbox" id="pauseMic"> Tắt micro khi đang đọc (bắt buộc nên bật trên iPhone)</label>
+    <label>Tốc độ đọc <input type="range" id="rate" min="0.7" max="1.6" step="0.1" value="1.1"></label>
+    <button id="clear" class="small">Xóa nội dung</button>
+  </div>
+
+  <div id="warn" class="warn"></div>
+
+  <div class="panels">
+    <div class="panel" id="pEn"><h2>Tiếng Anh (nghe được)</h2></div>
+    <div class="panel" id="pVi"><h2>Tiếng Việt (bản dịch)</h2></div>
+  </div>
+
+  <div class="tip">
+    <b>Lưu ý:</b> dùng <b>Safari</b> (iPhone), <b>Google Chrome</b> hoặc <b>Microsoft Edge</b> (máy tính), có kết nối Internet. Lần đầu bấm "Bắt đầu", trình duyệt sẽ hỏi quyền dùng micro, hãy bấm <b>Cho phép</b>.
+    Trên máy tính: bỏ chọn "Tắt micro khi đang đọc" để micro nghe liên tục, các câu mới được xếp hàng và đọc theo thứ tự. Trên iPhone: tùy chọn này được bật sẵn, micro sẽ tạm dừng lúc loa đọc nên câu nói chen vào lúc đó có thể bị bỏ sót. Nên đeo tai nghe để tiếng Việt không dội ngược vào micro.
+  </div>
+</main>
+
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const btn = $('btn'), statusEl = $('status'), pEn = $('pEn'), pVi = $('pVi'), warn = $('warn');
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  function showWarn(msg) { warn.textContent = msg; warn.style.display = 'block'; }
+
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const RESTART_DELAY = isIOS ? 300 : 50;
+  if (isIOS) $('pauseMic').checked = true; // iPhone: micro và loa không chạy đồng thời tốt, mặc định tắt mic khi đang đọc
+  if (!window.isSecureContext || location.protocol === 'file:') {
+    warn.dataset.keep = '1';
+    showWarn('Trang đang mở dưới dạng file nội bộ nên iPhone sẽ không cho dùng micro. Hãy mở trang qua địa chỉ https:// (xem hướng dẫn đưa lên mạng).');
+  }
+  let wakeLock = null;
+  async function keepAwake() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+
+  if (!SR) {
+    showWarn('Trình duyệt này không hỗ trợ nhận dạng giọng nói. Vui lòng mở file này bằng Google Chrome hoặc Microsoft Edge.');
+    btn.disabled = true;
+    return;
+  }
+
+  // ---------- Giọng đọc tiếng Việt ----------
+  let viVoice = null;
+  function loadVoice() {
+    const voices = speechSynthesis.getVoices();
+    viVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('vi')) || null;
+    if (!viVoice && voices.length) {
+      showWarn('Máy chưa có giọng đọc tiếng Việt. Trên Windows: Settings → Time & language → Speech → Add voices → chọn Vietnamese. Hoặc dùng Microsoft Edge (có sẵn giọng "HoaiMy" rất tự nhiên).');
+    } else if (!warn.dataset.keep) { warn.style.display = 'none'; }
+  }
+  speechSynthesis.onvoiceschanged = loadVoice;
+  loadVoice();
+
+  // ---------- Dịch ----------
+  let nativeTranslator = null;
+  async function initNative() {
+    try {
+      if ('Translator' in self) {
+        const avail = await Translator.availability({ sourceLanguage: 'en', targetLanguage: 'vi' });
+        if (avail !== 'unavailable') {
+          nativeTranslator = await Translator.create({ sourceLanguage: 'en', targetLanguage: 'vi' });
+        }
+      }
+    } catch (e) { nativeTranslator = null; }
+  }
+  initNative();
+
+  async function translate(text) {
+    if (nativeTranslator) {
+      try { return await nativeTranslator.translate(text); } catch (e) {}
+    }
+    try {
+      const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&q=' + encodeURIComponent(text);
+      const r = await fetch(url);
+      const j = await r.json();
+      return j[0].map(x => x[0]).join('');
+    } catch (e) {}
+    try {
+      const r = await fetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=en|vi');
+      const j = await r.json();
+      return j.responseData.translatedText;
+    } catch (e) {}
+    return '[Không dịch được. Kiểm tra kết nối Internet]';
+  }
+
+  // ---------- Đọc ra loa (xếp hàng, không chồng tiếng) ----------
+  let queued = 0; // số câu đang chờ đọc (micro vẫn nghe liên tục, không bị tắt)
+  function speak(text) {
+    if (!$('speakOn').checked) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'vi-VN';
+    if (viVoice) u.voice = viVoice;
+    // Hàng đợi càng dài thì đọc càng nhanh để đuổi kịp người nói
+    const base = parseFloat($('rate').value);
+    u.rate = Math.min(1.9, base + Math.max(0, queued) * 0.15);
+    queued++;
+    // Nếu bật "tắt micro khi đang đọc" thì dừng mic trước khi loa phát
+    if ($('pauseMic').checked) { try { rec.stop(); } catch (e) {} }
+    u.onend = u.onerror = () => {
+      queued = Math.max(0, queued - 1);
+      if (queued === 0 && running && $('pauseMic').checked) setTimeout(startRec, RESTART_DELAY);
+    };
+    speechSynthesis.speak(u);
+  }
+
+  // ---------- Hiển thị ----------
+  function addLine(panel, text, cls) {
+    const d = document.createElement('div');
+    d.className = 'line' + (cls ? ' ' + cls : '');
+    d.textContent = text;
+    panel.appendChild(d);
+    panel.scrollTop = panel.scrollHeight;
+    return d;
+  }
+
+  // ---------- Nhận dạng giọng nói ----------
+  const rec = new SR();
+  rec.lang = 'en-US';
+  rec.continuous = true;
+  rec.interimResults = true;
+  let running = false, recActive = false, interimDiv = null;
+
+  function setStatus(t, live) { statusEl.textContent = t; statusEl.className = live ? 'live' : ''; }
+
+  function startRec() {
+    if (recActive || !running) return;
+    try { rec.start(); recActive = true; } catch (e) {}
+  }
+
+  // Số từ đã được dịch của từng đoạn nhận dạng (để không dịch trùng)
+  let committed = {};
+  let pauseTimer = null;
+  let lastEv = null;
+  let orderChain = Promise.resolve(); // giữ đúng thứ tự câu khi dịch song song
+
+  rec.onstart = () => { committed = {}; setStatus('Đang nghe tiếng Anh…', true); };
+
+  // Đưa một đoạn tiếng Anh đi dịch + đọc ngay
+  function commit(text) {
+    text = text.trim();
+    if (!text) return;
+    addLine(pEn, text);
+    const slot = addLine(pVi, '…', 'interim');
+    const p = translate(text);               // dịch chạy song song
+    orderChain = orderChain.then(() => p).then(vi => {   // nhưng hiển thị/đọc theo thứ tự
+      slot.textContent = vi;
+      slot.className = 'line';
+      pVi.scrollTop = pVi.scrollHeight;
+      speak(vi);
+    });
+  }
+
+  // Lấy phần chưa dịch của một đoạn nhận dạng
+  function pending(i, res) {
+    const words = res[0].transcript.trim().split(/\s+/).filter(Boolean);
+    const done = committed[i] || 0;
+    return { words, done, rest: words.slice(done).join(' ') };
+  }
+
+  // Khi im lặng đủ lâu (độ nhạy chỉnh được), chốt câu ngay, không chờ trình duyệt
+  function flushByPause() {
+    if (!lastEv) return;
+    const ev = lastEv;
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const res = ev.results[i];
+      const p = pending(i, res);
+      if (p.rest) { commit(p.rest); committed[i] = p.words.length; }
+    }
+    if (interimDiv) { interimDiv.remove(); interimDiv = null; }
+  }
+
+  rec.onresult = (ev) => {
+    lastEv = ev;
+    clearTimeout(pauseTimer);
+    let interim = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const res = ev.results[i];
+      const p = pending(i, res);
+      if (res.isFinal) {
+        if (interimDiv) { interimDiv.remove(); interimDiv = null; }
+        if (p.rest) commit(p.rest);
+        committed[i] = p.words.length;
+      } else if (p.rest) {
+        interim += p.rest + ' ';
+      }
+    }
+    if (interim) {
+      if (!interimDiv) interimDiv = addLine(pEn, '', 'interim');
+      interimDiv.textContent = interim;
+      pEn.scrollTop = pEn.scrollHeight;
+      pauseTimer = setTimeout(flushByPause, parseInt($('pause').value, 10));
+    }
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      warn.dataset.keep = '1';
+      showWarn('Chưa được cấp quyền micro hoặc Nhận dạng giọng nói. iPhone: vào Cài đặt → Safari → Micro → chọn Cho phép; và Cài đặt → Cài đặt chung → Bàn phím → bật "Bật Đọc chính tả". Sau đó tải lại trang.');
+      running = false; btn.click && stopUI();
+    } else if (e.error === 'no-speech' || e.error === 'aborted') {
+      /* bỏ qua */
+    } else {
+      setStatus('Lỗi: ' + e.error, false);
+    }
+  };
+  rec.onend = () => {
+    recActive = false;
+    const holdForSpeech = $('pauseMic').checked && queued > 0;
+    if (running && !holdForSpeech) setTimeout(startRec, RESTART_DELAY); // tự khởi động lại để nghe liên tục
+  };
+
+  function stopUI() {
+    btn.textContent = '▶ Bắt đầu'; btn.className = '';
+    setStatus('Đã dừng', false);
+  }
+
+  btn.onclick = () => {
+    if (!running) {
+      running = true;
+      btn.textContent = '■ Dừng'; btn.className = 'stop';
+      speechSynthesis.cancel();
+      // iPhone chỉ cho phát giọng đọc sau khi người dùng chạm nút: "mở khóa" loa ngay tại đây
+      try { const u0 = new SpeechSynthesisUtterance(' '); u0.volume = 0; speechSynthesis.speak(u0); } catch (e) {}
+      keepAwake();
+      startRec();
+    } else {
+      running = false;
+      try { if (wakeLock) wakeLock.release(); } catch (e) {}
+      try { rec.stop(); } catch (e) {}
+      speechSynthesis.cancel();
+      stopUI();
+    }
+  };
+
+  $('clear').onclick = () => {
+    pEn.innerHTML = '<h2>Tiếng Anh (nghe được)</h2>';
+    pVi.innerHTML = '<h2>Tiếng Việt (bản dịch)</h2>';
+    interimDiv = null;
+    speechSynthesis.cancel();
+  };
+})();
+</script>
+</body>
+</html>
