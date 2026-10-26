@@ -32,6 +32,14 @@
   .line.interim { color:#8a97a5; font-style:italic; }
   .warn { background:#fff4e0; border-left:4px solid #f0a020; padding:10px 14px; margin-top:16px; border-radius:6px; font-size:14px; display:none; }
   .tip { font-size:13px; color:#55636f; margin-top:14px; line-height:1.5; }
+  details.settings { background:#fff; border-radius:10px; padding:12px 16px; margin-top:16px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  details.settings summary { cursor:pointer; font-weight:600; color:var(--main); font-size:15px; }
+  details.settings .row { margin:12px 0; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  details.settings label.col { display:block; margin-top:12px; font-size:14px; }
+  details.settings select, details.settings input[type=password] { font-size:15px; padding:8px; border:1px solid #c5d0db; border-radius:6px; min-width:240px; }
+  details.settings textarea { width:100%; font-size:14px; font-family:Consolas, monospace; padding:8px; border:1px solid #c5d0db; border-radius:6px; margin-top:6px; }
+  details.settings .hint { font-size:12.5px; color:#55636f; line-height:1.5; }
+  details.settings button.small { margin:10px 8px 0 0; }
 </style>
 </head>
 <body>
@@ -49,6 +57,27 @@
     <label>Tốc độ đọc <input type="range" id="rate" min="0.7" max="1.6" step="0.1" value="1.1"></label>
     <button id="clear" class="small">Xóa nội dung</button>
   </div>
+
+  <details class="settings" open>
+    <summary>⚙ Cài đặt dịch thuật y khoa</summary>
+    <div class="row">
+      <label>Chế độ dịch
+        <select id="mode">
+          <option value="mt">Nhanh: Google + từ điển y khoa</option>
+          <option value="ai">Chính xác: AI y khoa (Claude)</option>
+        </select>
+      </label>
+    </div>
+    <div class="row" id="aiBox">
+      <label>API key Anthropic <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off"></label>
+      <span class="hint">Key chỉ lưu trong trình duyệt của thiết bị này, không nằm trong file. Lấy key tại console.anthropic.com (tài khoản API riêng, tính phí theo lượng dùng). Nên đặt hạn mức chi tiêu thấp. AI sẽ tự sửa từ nghe nhầm theo ngữ cảnh (ví dụ "creating" → creatinine). Nếu AI lỗi hoặc quá 8 giây, app tự chuyển sang chế độ nhanh.</span>
+    </div>
+    <label class="col">Từ điển thuật ngữ (mỗi dòng: tiếng Anh = tiếng Việt; dòng bắt đầu bằng # là ghi chú)
+      <textarea id="glossary" rows="12" spellcheck="false"></textarea>
+    </label>
+    <button id="saveSet" class="small">Lưu cài đặt</button>
+    <button id="resetGl" class="small">Khôi phục từ điển mẫu</button>
+  </details>
 
   <div id="warn" class="warn"></div>
 
@@ -116,7 +145,193 @@
   }
   initNative();
 
+  // ---------- Cài đặt + từ điển y khoa ----------
+  const DEFAULT_GLOSSARY = [
+    '# Thận - lọc máu',
+    'hemodialysis = chạy thận nhân tạo',
+    'peritoneal dialysis = lọc màng bụng',
+    'chronic kidney disease = bệnh thận mạn',
+    'end-stage renal disease = bệnh thận giai đoạn cuối',
+    'end-stage kidney disease = bệnh thận giai đoạn cuối',
+    'acute kidney injury = tổn thương thận cấp',
+    'glomerular filtration rate = mức lọc cầu thận',
+    'eGFR = mức lọc cầu thận ước tính (eGFR)',
+    'creatinine = creatinin',
+    'blood urea nitrogen = ure máu',
+    'proteinuria = protein niệu',
+    'albuminuria = albumin niệu',
+    'hematuria = tiểu máu',
+    'arteriovenous fistula = cầu nối động tĩnh mạch',
+    'vascular access = đường vào mạch máu',
+    'dialyzer = quả lọc',
+    'dialysate = dịch lọc',
+    'ultrafiltration = siêu lọc',
+    'dry weight = cân nặng khô',
+    'hyperkalemia = tăng kali máu',
+    'hypokalemia = hạ kali máu',
+    'hyponatremia = hạ natri máu',
+    'hyperphosphatemia = tăng phospho máu',
+    'secondary hyperparathyroidism = cường cận giáp thứ phát',
+    'renal anemia = thiếu máu do bệnh thận',
+    'erythropoietin = erythropoietin (EPO)',
+    '# Tim mạch - nội tiết - hô hấp',
+    'hypertension = tăng huyết áp',
+    'hypotension = hạ huyết áp',
+    'myocardial infarction = nhồi máu cơ tim',
+    'heart failure = suy tim',
+    'atrial fibrillation = rung nhĩ',
+    'diabetes mellitus = đái tháo đường',
+    'insulin resistance = kháng insulin',
+    'stroke = đột quỵ',
+    'cerebral infarction = nhồi máu não',
+    'pulmonary edema = phù phổi cấp',
+    'pneumonia = viêm phổi',
+    'sepsis = nhiễm khuẩn huyết',
+    'septic shock = sốc nhiễm khuẩn',
+    '# Huyết học - xét nghiệm',
+    'anemia = thiếu máu',
+    'platelet = tiểu cầu',
+    'white blood cell = bạch cầu',
+    'red blood cell = hồng cầu',
+    'hemorrhage = xuất huyết',
+    'anticoagulant = thuốc chống đông',
+    'antibiotic = kháng sinh',
+    '# Điều trị - hồi sức',
+    'central venous catheter = catheter tĩnh mạch trung tâm',
+    'mechanical ventilation = thở máy',
+    'intubation = đặt nội khí quản',
+    'intensive care unit = hồi sức tích cực',
+    'emergency department = khoa cấp cứu',
+    'outpatient = ngoại trú',
+    'inpatient = nội trú',
+    'discharge = xuất viện',
+    '# Dược - thử nghiệm - quản lý',
+    'contraindication = chống chỉ định',
+    'indication = chỉ định',
+    'adverse drug reaction = phản ứng có hại của thuốc',
+    'adverse event = biến cố bất lợi',
+    'dosage = liều dùng',
+    'pharmacokinetics = dược động học',
+    'pharmacodynamics = dược lực học',
+    'randomized controlled trial = thử nghiệm lâm sàng ngẫu nhiên có đối chứng',
+    'evidence-based medicine = y học dựa trên bằng chứng',
+    'informed consent = đồng ý có hiểu biết',
+    'infection control = kiểm soát nhiễm khuẩn',
+    'hospital-acquired infection = nhiễm khuẩn bệnh viện',
+    'surgical site infection = nhiễm khuẩn vết mổ',
+    'quality management = quản lý chất lượng',
+    'nursing = điều dưỡng',
+    'nutrition = dinh dưỡng'
+  ].join('\n');
+
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function load(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }
+
+  $('glossary').value = load('glossary', DEFAULT_GLOSSARY);
+  $('apiKey').value = load('apiKey', '');
+  $('mode').value = load('mode', 'mt');
+
+  let glossary = [];
+  function parseGlossary() {
+    glossary = $('glossary').value.split('\n')
+      .map(l => l.trim())
+      .filter(l => l && l[0] !== '#' && l.indexOf('=') > 0)
+      .map(l => { const i = l.indexOf('='); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; })
+      .filter(p => p[0] && p[1])
+      .sort((a, b) => b[0].length - a[0].length) // cụm dài khớp trước
+      .map(p => ({
+        vi: p[1],
+        re: new RegExp('(^|[^A-Za-z0-9])' + p[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:s|es)?(?![A-Za-z0-9])', 'gi')
+      }));
+  }
+  parseGlossary();
+
+  function applyGlossary(text) {
+    glossary.forEach(g => { text = text.replace(g.re, (m, pre) => pre + g.vi); });
+    return text;
+  }
+
+  function syncMode() { $('aiBox').style.display = $('mode').value === 'ai' ? 'flex' : 'none'; }
+  syncMode();
+  $('mode').onchange = () => { store('mode', $('mode').value); syncMode(); };
+  $('saveSet').onclick = () => {
+    store('glossary', $('glossary').value);
+    store('apiKey', $('apiKey').value.trim());
+    store('mode', $('mode').value);
+    parseGlossary();
+    aiWarned = false;
+    $('saveSet').textContent = '✓ Đã lưu';
+    setTimeout(() => { $('saveSet').textContent = 'Lưu cài đặt'; }, 1500);
+  };
+  $('resetGl').onclick = () => { $('glossary').value = DEFAULT_GLOSSARY; };
+
+  // ---------- Dịch bằng AI (Claude) ----------
+  let history = [], aiWarned = false;
+  async function translateAI(text) {
+    const key = $('apiKey').value.trim();
+    if (!key) throw new Error('nokey');
+    const gl = $('glossary').value.split('\n').map(l => l.trim()).filter(l => l && l[0] !== '#').join('\n');
+    const system =
+      'You are a professional simultaneous interpreter for medical conferences and hospital training, English to Vietnamese.\n' +
+      '- The input is raw speech-recognition output: it may lack punctuation and contain misheard words. Silently correct clearly misheard medical terms using context (e.g. "creating level" -> creatinine, "he modialysis" -> hemodialysis).\n' +
+      '- Translate into natural, fluent Vietnamese using the standard terminology used in Vietnamese hospitals and Ministry of Health documents.\n' +
+      '- Keep drug names, lab abbreviations and guideline names (eGFR, HbA1c, KDIGO, ...) in their original form. Keep numbers and units exactly.\n' +
+      '- If the input is an incomplete fragment, translate it as is. Do not invent or complete it.\n' +
+      '- Output ONLY the Vietnamese translation. No notes, no quotes, no explanations.\n' +
+      '- Mandatory glossary (English = Vietnamese):\n' + gl;
+    const ctx = history.slice(-3).join(' ');
+    const user = (ctx ? 'Previous sentences (context only, do NOT translate):\n' + ctx + '\n\n' : '') +
+                 'Translate this:\n' + text;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        signal: ctl.signal,
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-5-5',
+          max_tokens: 500,
+          system: system,
+          messages: [{ role: 'user', content: user }]
+        })
+      });
+      if (!r.ok) throw new Error('http' + r.status);
+      const j = await r.json();
+      const out = (j.content || []).map(c => c.text || '').join('').trim();
+      if (!out) throw new Error('empty');
+      return out;
+    } finally { clearTimeout(timer); }
+  }
+
   async function translate(text) {
+    if ($('mode').value === 'ai') {
+      try {
+        const out = await translateAI(text);
+        history.push(text);
+        return out;
+      } catch (e) {
+        if (!aiWarned) {
+          aiWarned = true;
+          warn.dataset.keep = '1';
+          const m = String(e.message || e);
+          showWarn(m === 'nokey' ? 'Chưa nhập API key, đang dùng chế độ nhanh (Google + từ điển).'
+                 : m === 'http401' ? 'API key không đúng, đang dùng chế độ nhanh (Google + từ điển).'
+                 : m === 'http429' ? 'Đã chạm giới hạn tốc độ hoặc hạn mức của API, đang dùng chế độ nhanh.'
+                 : 'AI phản hồi lỗi hoặc quá chậm (' + m + '), đang dùng chế độ nhanh. Câu sau sẽ thử AI lại.');
+          setTimeout(() => { aiWarned = false; }, 60000);
+        }
+      }
+    }
+    return translateMT(applyGlossary(text));
+  }
+
+  async function translateMT(text) {
     if (nativeTranslator) {
       try { return await nativeTranslator.translate(text); } catch (e) {}
     }
