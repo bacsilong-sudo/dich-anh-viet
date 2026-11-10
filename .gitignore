@@ -1,0 +1,4 @@
+ios/build/
+*.ipa
+xcuserdata/
+.DS_Store
